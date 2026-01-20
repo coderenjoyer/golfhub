@@ -70,6 +70,8 @@ export default function Login() {
                 });
                 if (error) throw error;
             } else {
+                const isMegaAdmin = firstName.trim() === 'Mega' && lastName.trim() === 'Admin';
+
                 const { error } = await supabase.auth.signUp({
                     email,
                     password,
@@ -78,6 +80,7 @@ export default function Login() {
                             first_name: firstName,
                             last_name: lastName,
                             phone: phone,
+                            role: isMegaAdmin ? 'admin' : 'user', // Automatically assign role based on name
                         },
                     },
                 });

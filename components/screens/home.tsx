@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
     View,
     Text,
@@ -21,13 +21,97 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const HomeScreen: React.FC = () => {
     const navigation = useNavigation<any>();
     const [refreshing, setRefreshing] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
+    const [nextGame, setNextGame] = useState<any>(null);
+    const [tournaments, setTournaments] = useState<any[]>([]);
+
+    // Cache Keys
+    const DASHBOARD_CACHE_KEY = 'golfhub_dashboard_data';
+    const FIRST_LAUNCH_KEY = 'golfhub_has_launched';
+
+    // Mock Data for "fetch"
+    const MOCK_DATA = {
+        nextGame: null, // Change this to an object to see a booked game
+        tournaments: [
+            {
+                id: 1,
+                title: 'Summer Open 2026',
+                date: 'Nov 15, 2026',
+                image: 'https://images.unsplash.com/photo-1587174486073-ae5e5cff23aa?q=80&w=2070&auto=format&fit=crop'
+            },
+            {
+                id: 2,
+                title: 'Wack Wack Charity',
+                date: 'Dec 05, 2026',
+                image: 'https://images.unsplash.com/photo-1535131749006-b7f58c99034b?q=80&w=2070&auto=format&fit=crop'
+            }
+        ]
+    };
+
+    const loadData = async (isRefresh = false) => {
+        if (!isRefresh) setIsLoading(true);
+        try {
+            // Simulate API Network Request
+            await new Promise(resolve => setTimeout(resolve, 1500));
+
+            // In a real app, this would be: const response = await api.getDashboard();
+            const newData = MOCK_DATA;
+
+            setNextGame(newData.nextGame);
+            setTournaments(newData.tournaments);
+
+            // Cache the fresh data
+            await AsyncStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify(newData));
+
+        } catch (error) {
+            console.error('Failed to fetch dashboard data:', error);
+            Alert.alert('Error', 'Could not refresh data.');
+        } finally {
+            if (isRefresh) setRefreshing(false);
+            setIsLoading(false);
+        }
+    };
+
+    const loadCachedData = async () => {
+        try {
+            const cachedString = await AsyncStorage.getItem(DASHBOARD_CACHE_KEY);
+            if (cachedString) {
+                const cachedData = JSON.parse(cachedString);
+                setNextGame(cachedData.nextGame);
+                setTournaments(cachedData.tournaments);
+            }
+        } catch (error) {
+            console.log('No cached data found or error reading cache');
+        }
+    };
+
+    const checkFirstLaunch = async () => {
+        try {
+            const hasLaunched = await AsyncStorage.getItem(FIRST_LAUNCH_KEY);
+            if (hasLaunched === null) {
+                // First time launching
+                Alert.alert("Welcome to GolfBuddy!", "Track your games, join tournaments, and connect with friends.");
+                await AsyncStorage.setItem(FIRST_LAUNCH_KEY, 'true');
+            }
+        } catch (error) {
+            console.error('Error checking first launch', error);
+        }
+    };
+
+    useEffect(() => {
+        // 1. Check first launch
+        checkFirstLaunch();
+
+        // 2. Load cached data immediately for speed
+        loadCachedData();
+
+        // 3. Fetch fresh data in background
+        loadData();
+    }, []);
 
     const onRefresh = useCallback(() => {
         setRefreshing(true);
-        // Simulate data re-fetch
-        setTimeout(() => {
-            setRefreshing(false);
-        }, 2000);
+        loadData(true);
     }, []);
 
     const handleLogout = async () => {
@@ -101,20 +185,36 @@ const HomeScreen: React.FC = () => {
                 <View style={styles.sectionContainer}>
                     <Text style={styles.sectionTitle}>Your Next Game</Text>
 
-                    {/* Scenario 2: No Upcoming Bookings */}
-                    <View style={[styles.heroCard, { backgroundColor: COLORS.primary }]}>
-                        <View style={styles.heroContent}>
-                            <Text style={styles.heroMessage}>No upcoming games.</Text>
-                            <Text style={styles.heroSubMessage}>Find a tee time and invite your buddies!</Text>
+                    {/* Dynamic Hero Section */}
+                    {nextGame ? (
+                        <View style={[styles.heroCard, { backgroundColor: COLORS.secondary }]}>
+                            <View style={styles.heroContent}>
+                                <Text style={styles.heroMessage}>Upcoming: {nextGame.courseName}</Text>
+                                <Text style={styles.heroSubMessage}>{nextGame.date} @ {nextGame.time}</Text>
 
-                            <TouchableOpacity
-                                style={styles.heroButton}
-                                onPress={() => navigation.navigate('Schedule')}
-                            >
-                                <Text style={styles.heroButtonText}>View Schedule</Text>
-                            </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.heroButton}
+                                    onPress={() => navigation.navigate('Schedule')}
+                                >
+                                    <Text style={styles.heroButtonText}>View Details</Text>
+                                </TouchableOpacity>
+                            </View>
                         </View>
-                    </View>
+                    ) : (
+                        <View style={[styles.heroCard, { backgroundColor: COLORS.primary }]}>
+                            <View style={styles.heroContent}>
+                                <Text style={styles.heroMessage}>No upcoming games.</Text>
+                                <Text style={styles.heroSubMessage}>Find a tee time and invite your buddies!</Text>
+
+                                <TouchableOpacity
+                                    style={styles.heroButton}
+                                    onPress={() => navigation.navigate('Schedule')}
+                                >
+                                    <Text style={styles.heroButtonText}>View Schedule</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    )}
                 </View>
 
                 {/* Upcoming Tournaments Section */}
@@ -127,35 +227,25 @@ const HomeScreen: React.FC = () => {
                     </View>
 
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.carouselContent}>
-                        {/* Mock Tournament Card 1 */}
-                        <TouchableOpacity style={styles.tournamentCard} onPress={() => navigation.navigate('Tournaments')}>
-                            <Image
-                                source={{ uri: 'https://images.unsplash.com/photo-1587174486073-ae5e5cff23aa?q=80&w=2070&auto=format&fit=crop' }}
-                                style={styles.tournamentImage}
-                            />
-                            <View style={styles.tournamentInfo}>
-                                <Text style={styles.tournamentTitle}>Summer Open 2026</Text>
-                                <View style={styles.tournamentMeta}>
-                                    <CalendarIcon size={14} color={COLORS.textLight} />
-                                    <Text style={styles.tournamentDate}>Nov 15, 2026</Text>
+                        {tournaments.map((tournament) => (
+                            <TouchableOpacity
+                                key={tournament.id}
+                                style={styles.tournamentCard}
+                                onPress={() => navigation.navigate('Tournaments')}
+                            >
+                                <Image
+                                    source={{ uri: tournament.image }}
+                                    style={styles.tournamentImage}
+                                />
+                                <View style={styles.tournamentInfo}>
+                                    <Text style={styles.tournamentTitle}>{tournament.title}</Text>
+                                    <View style={styles.tournamentMeta}>
+                                        <CalendarIcon size={14} color={COLORS.textLight} />
+                                        <Text style={styles.tournamentDate}>{tournament.date}</Text>
+                                    </View>
                                 </View>
-                            </View>
-                        </TouchableOpacity>
-
-                        {/* Mock Tournament Card 2 */}
-                        <TouchableOpacity style={styles.tournamentCard} onPress={() => navigation.navigate('Tournaments')}>
-                            <Image
-                                source={{ uri: 'https://images.unsplash.com/photo-1535131749006-b7f58c99034b?q=80&w=2070&auto=format&fit=crop' }}
-                                style={styles.tournamentImage}
-                            />
-                            <View style={styles.tournamentInfo}>
-                                <Text style={styles.tournamentTitle}>Wack Wack Charity</Text>
-                                <View style={styles.tournamentMeta}>
-                                    <CalendarIcon size={14} color={COLORS.textLight} />
-                                    <Text style={styles.tournamentDate}>Dec 05, 2026</Text>
-                                </View>
-                            </View>
-                        </TouchableOpacity>
+                            </TouchableOpacity>
+                        ))}
                     </ScrollView>
                 </View>
 

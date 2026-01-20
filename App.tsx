@@ -15,6 +15,7 @@ import ScheduleScreen from './components/screens/schedule';
 import TournamentsScreen from './components/screens/tournament';
 import ClubhouseScreen from './components/screens/clubhouse';
 import ProfileScreen from './components/screens/profile';
+import AdminDashboard from './components/screens/admin/dashboard';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -88,15 +89,26 @@ const HomeTabs = () => {
 const App = () => {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
+      if (session?.user?.user_metadata?.role === 'admin') {
+        setIsAdmin(true);
+      } else {
+        setIsAdmin(false);
+      }
       setLoading(false);
     });
 
     supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
+      if (session?.user?.user_metadata?.role === 'admin') {
+        setIsAdmin(true);
+      } else {
+        setIsAdmin(false);
+      }
     });
   }, []);
 
@@ -115,7 +127,11 @@ const App = () => {
   return (
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="HomeTabs" component={HomeTabs} />
+        {isAdmin ? (
+          <Stack.Screen name="AdminDashboard" component={AdminDashboard} />
+        ) : (
+          <Stack.Screen name="HomeTabs" component={HomeTabs} />
+        )}
       </Stack.Navigator>
     </NavigationContainer>
   );
