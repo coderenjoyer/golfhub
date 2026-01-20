@@ -1,4 +1,5 @@
 import React from 'react';
+import { COLORS } from '../../constants/colors';
 import {
     View,
     Text,
@@ -28,7 +29,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#f9f9f9',
     },
     header: {
-        backgroundColor: '#1B9E9E',
+        backgroundColor: COLORS.primary,
         paddingVertical: 16,
         paddingHorizontal: 16,
     },

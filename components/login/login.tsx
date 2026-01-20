@@ -13,19 +13,11 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 
+import { COLORS } from '../../constants/colors';
+
 const { width } = Dimensions.get('window');
 
-// Color Palette
-const COLORS = {
-    primary: '#2E8B57', // SeaGreen
-    dark: '#1B4D3E',
-    accent: '#98FB98', // PaleGreen
-    white: '#FFFFFF',
-    gray: '#F0F0F0',
-    text: '#333333',
-    textLight: '#666666',
-    error: '#FF6B6B',
-};
+// Removed local COLORS definition in favor of unified constant
 
 import { Alert } from 'react-native';
 import { supabase } from '../../lib/supabase';
@@ -49,6 +41,23 @@ export default function Login() {
             duration: 300,
             useNativeDriver: false,
         }).start();
+    };
+
+    const handleForgotPassword = async () => {
+        if (!email) {
+            Alert.alert("Required", "Please enter your email address to reset your password.");
+            return;
+        }
+        setLoading(true);
+        try {
+            const { error } = await supabase.auth.resetPasswordForEmail(email);
+            if (error) throw error;
+            Alert.alert("Success", "Password reset instructions have been sent to your email.");
+        } catch (error: any) {
+            Alert.alert("Error", error.message);
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleAction = async () => {
@@ -196,7 +205,7 @@ export default function Login() {
                         </View>
 
                         {isLogin && (
-                            <TouchableOpacity style={styles.forgotPass}>
+                            <TouchableOpacity style={styles.forgotPass} onPress={handleForgotPassword} disabled={loading}>
                                 <Text style={styles.forgotPassText}>Forgot Password?</Text>
                             </TouchableOpacity>
                         )}
@@ -206,6 +215,7 @@ export default function Login() {
                                 {loading ? 'Loading...' : (isLogin ? 'Login' : 'Create Account')}
                             </Text>
                         </TouchableOpacity>
+
 
                     </View>
                 </ScrollView>
@@ -237,7 +247,7 @@ const styles = StyleSheet.create({
         width: 200,
         height: 200,
         borderRadius: 100,
-        backgroundColor: COLORS.accent,
+        backgroundColor: COLORS.lightBlue,
         opacity: 0.2,
     },
     circle2: {
@@ -272,7 +282,7 @@ const styles = StyleSheet.create({
     },
     subtitle: {
         fontSize: 16,
-        color: COLORS.accent,
+        color: COLORS.lightBlue,
         marginTop: 5,
     },
     toggleContainer: {
