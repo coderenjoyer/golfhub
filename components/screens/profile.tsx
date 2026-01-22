@@ -14,13 +14,154 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Calendar, Users, Bell, Lock, Edit2, ChevronRight, LogOut } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { decode } from 'base64-arraybuffer';
 import { supabase } from '../../lib/supabase';
+import { useNavigation } from '@react-navigation/native';
 
 const { width } = Dimensions.get('window');
 
 const ProfileScreen: React.FC = () => {
-    // Determine gradient colors based on request: Sky Blue (#0288D1) to Fairway Green (#2E7D32)
-    // Using closest approximation or updating constants if allowed. I will use the hex codes directly as requested.
+    const navigation = useNavigation<any>();
+    const [loading, setLoading] = useState(true);
+    const [profile, setProfile] = useState<any>(null);
+
+    useEffect(() => {
+        getProfile();
+    }, []);
+
+    async function getProfile() {
+        try {
+            setLoading(true);
+            const { data: { session } } = await supabase.auth.getSession();
+
+            if (!session) {
+                setLoading(false);
+                return;
+            }
+
+            // check if profile exists
+            let { data, error, status } = await supabase
+                .from('profiles')
+                .select(`*`)
+                .eq('id', session.user.id)
+                .maybeSingle();
+
+            if (error && status !== 406) {
+                throw error;
+            }
+
+            // If no profile exists (old user), create one
+            if (!data) {
+                console.log('Profile missing, creating default profile...');
+                const { user } = session;
+                const newProfile = {
+                    id: user.id,
+                    first_name: user.user_metadata.first_name || 'Golfer',
+                    last_name: user.user_metadata.last_name || '',
+                    phone: user.user_metadata.phone || '',
+                    role: user.user_metadata.role || 'user',
+                    avatar_url: user.user_metadata.avatar_url || '',
+                };
+
+                const { error: insertError } = await supabase
+                    .from('profiles')
+                    .insert([newProfile]);
+
+                if (insertError) throw insertError;
+
+                // Set the data to the new profile
+                data = newProfile;
+            }
+
+            // Fetch Confirmed Games Count
+            const { count, error: countError } = await supabase
+                .from('bookings')
+                .select('*', { count: 'exact', head: true })
+                .eq('user_id', session.user.id)
+                .eq('status', 'confirmed');
+
+            if (!countError && data) {
+                // Ensure games_played is set on data, even if data comes from newProfile or fetched profile
+                data.games_played = count || 0;
+            }
+
+            if (data) {
+                setProfile(data);
+            }
+        } catch (error) {
+            if (error instanceof Error) {
+                Alert.alert('Error fetching profile', error.message);
+            }
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    const pickImage = async () => {
+        try {
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.5,
+                base64: true,
+            });
+
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                const asset = result.assets[0];
+                if (asset.base64) {
+                    uploadImage(asset.base64, asset.uri);
+                }
+            }
+        } catch (error) {
+            console.log("Error picking image:", error);
+            Alert.alert("Error", "Failed to pick image");
+        }
+    };
+
+    const uploadImage = async (base64Data: string, uri: string) => {
+        try {
+            setLoading(true);
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) return;
+
+            const fileExt = uri.split('.').pop()?.toLowerCase() || 'jpg';
+            const fileName = `${session.user.id}/${Date.now()}.${fileExt}`;
+            const filePath = `${fileName}`;
+
+            const { error: uploadError } = await supabase.storage
+                .from('avatars')
+                .upload(filePath, decode(base64Data), {
+                    contentType: `image/${fileExt}`,
+                    upsert: true
+                });
+
+            if (uploadError) throw uploadError;
+
+            const { data } = supabase.storage
+                .from('avatars')
+                .getPublicUrl(filePath);
+
+            if (data && data.publicUrl) {
+                // Update profile in DB
+                const { error: updateError } = await supabase
+                    .from('profiles')
+                    .update({ avatar_url: data.publicUrl })
+                    .eq('id', session.user.id);
+
+                if (updateError) throw updateError;
+
+                // Update local state
+                setProfile((prev: any) => ({ ...prev, avatar_url: data.publicUrl }));
+                Alert.alert("Success", "Profile picture updated!");
+            }
+        } catch (error: any) {
+            Alert.alert("Upload Error", error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const handleLogout = async () => {
         const performLogout = async () => {
@@ -30,7 +171,8 @@ const ProfileScreen: React.FC = () => {
             } catch (err) {
                 console.error('Unexpected error signing out:', err);
             } finally {
-                const { data } = await supabase.auth.refreshSession();
+                // Determine if we need to refresh or navigation will handle it
+                // Usually signOut invalidates the session automatically
             }
         };
 
@@ -69,18 +211,22 @@ const ProfileScreen: React.FC = () => {
                     style={styles.headerGradient}
                 >
                     <View style={styles.headerContent}>
-                        <View style={styles.avatarContainer}>
+                        <TouchableOpacity style={styles.avatarContainer} onPress={pickImage} disabled={loading}>
                             <Image
-                                source={{ uri: 'https://i.pravatar.cc/200?u=evan' }}
+                                source={{ uri: profile?.avatar_url || 'https://i.pravatar.cc/200?u=empty' }}
                                 style={styles.avatar}
                             />
                             <View style={styles.editIconContainer}>
                                 <Edit2 size={12} color={COLORS.primary} />
                             </View>
-                        </View>
+                        </TouchableOpacity>
 
-                        <Text style={styles.userName}>Evan</Text>
-                        <Text style={styles.userClub}>Tanjay Golf Club • Member</Text>
+                        <Text style={styles.userName}>
+                            {profile ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Golfer' : 'Loading...'}
+                        </Text>
+                        <Text style={styles.userClub}>
+                            {profile?.club_name || 'No Club Selected'} • {profile?.role ? profile.role.charAt(0).toUpperCase() + profile.role.slice(1) : 'Member'}
+                        </Text>
                     </View>
                 </LinearGradient>
 
@@ -88,24 +234,43 @@ const ProfileScreen: React.FC = () => {
                 <View style={styles.statsCard}>
                     <View style={styles.statItem}>
                         <Text style={styles.statLabel}>Handicap</Text>
-                        <Text style={[styles.statValue, { color: COLORS.primary }]}>12.4</Text>
+                        <Text style={[styles.statValue, { color: COLORS.primary }]}>
+                            {profile?.handicap !== undefined ? profile.handicap : '-'}
+                        </Text>
                     </View>
                     <View style={styles.statDivider} />
                     <View style={styles.statItem}>
                         <Text style={styles.statLabel}>Games</Text>
-                        <Text style={styles.statValue}>24</Text>
+                        <Text style={styles.statValue}>
+                            {profile?.games_played !== undefined ? profile.games_played : '-'}
+                        </Text>
                     </View>
                     <View style={styles.statDivider} />
                     <View style={styles.statItem}>
                         <Text style={styles.statLabel}>Friends</Text>
-                        <Text style={styles.statValue}>15</Text>
+                        <Text style={styles.statValue}>
+                            {profile?.friends_count !== undefined ? profile.friends_count : '-'}
+                        </Text>
                     </View>
                 </View>
 
                 {/* 3. Menu List */}
                 <View style={styles.menuContainer}>
                     {menuItems.map((item, index) => (
-                        <TouchableOpacity key={item.id} style={styles.menuItem}>
+                        <TouchableOpacity
+                            key={item.id}
+                            style={styles.menuItem}
+                            onPress={() => {
+                                if (item.id === 'schedule') {
+                                    navigation.navigate('MyBookings');
+                                } else if (item.id === 'notifications') {
+                                    navigation.navigate('Notifications');
+                                } else {
+                                    // Placeholder for others
+                                    Alert.alert(item.label, "Feature coming soon");
+                                }
+                            }}
+                        >
                             <View style={styles.menuLeft}>
                                 <View style={[styles.menuIconBox, { backgroundColor: item.iconColor + '20' }]}>
                                     <item.icon size={20} color={item.iconColor} />

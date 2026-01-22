@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { COLORS } from '../../constants/colors';
 import {
     View,
@@ -8,233 +8,597 @@ import {
     FlatList,
     TouchableOpacity,
     Image,
-    Dimensions,
+    Modal,
+    TextInput,
     Alert,
+    ActivityIndicator,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView
 } from 'react-native';
+import { Calendar, DateData, LocaleConfig } from 'react-native-calendars';
+import { format } from 'date-fns';
+import { supabase } from '../../lib/supabase';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Clock, Users, FileText, CheckCircle, XCircle, Info, RefreshCw, Lock } from 'lucide-react-native';
 
-// Interfaces for our Mock Data
-interface DateItem {
-    id: string;
-    dayName: string; // Mon, Tue
-    dayNumber: string; // 12, 13
-    fullDate: string; // For comparison
-    status: 'open' | 'busy' | 'full' | 'closed';
+// --- Types ---
+interface TeeSlot {
+    slot_time: string; // ISO String
+    booked_count: number;
+    is_user_booked: boolean;
+    user_booking_status: 'pending' | 'confirmed' | 'rejected' | 'proposed' | 'withdrawn' | 'cancelled' | null;
+    user_booking_id: string | null;
+    user_admin_note?: string;
+    user_proposed_time?: string;
 }
 
-interface TeeTime {
-    id: string;
-    time: string;
-    players: string[]; // List of avatar URLs
-    maxPlayers: number;
-    userStatus: 'none' | 'pending' | 'booked';
+interface DayLoad {
+    date: string; // YYYY-MM-DD
+    total_players: number;
+    status: 'low' | 'medium' | 'high' | 'closed';
 }
 
-const { width } = Dimensions.get('window');
-
-// Mock Data Generators
-const generateNext14Days = (): DateItem[] => {
-    const days: DateItem[] = [];
-    const today = new Date();
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-    for (let i = 0; i < 14; i++) {
-        const d = new Date(today);
-        d.setDate(today.getDate() + i);
-
-        // Random status generation
-        const rand = Math.random();
-        let status: DateItem['status'] = 'open';
-        if (rand > 0.8) status = 'closed';
-        else if (rand > 0.6) status = 'full';
-        else if (rand > 0.4) status = 'busy';
-
-        days.push({
-            id: i.toString(),
-            dayName: dayNames[d.getDay()],
-            dayNumber: d.getDate().toString(),
-            fullDate: d.toDateString(),
-            status: status
-        });
-    }
-    return days;
-};
-
-const generateTeeTimes = (dateStatus: string): TeeTime[] => {
-    if (dateStatus === 'closed') return [];
-
-    const times: TeeTime[] = [];
-    const startHour = 6; // 6 AM
-    const endHour = 16; // 4 PM
-
-    for (let h = startHour; h <= endHour; h++) {
-        // Create 15 min slots: 00, 15, 30, 45
-        ['00', '15', '30', '45'].forEach(minute => {
-            // Mock players
-            const playerCount = Math.floor(Math.random() * 5); // 0 to 4
-            const players = [];
-            for (let p = 0; p < playerCount; p++) {
-                players.push(`https://i.pravatar.cc/100?u=${h}${minute}${p}`);
-            }
-
-            times.push({
-                id: `${h}-${minute}`,
-                time: `${h > 12 ? h - 12 : h}:${minute} ${h >= 12 ? 'PM' : 'AM'}`,
-                players: players,
-                maxPlayers: 4,
-                userStatus: 'none',
-            });
-        });
-    }
-    return times;
-};
+// --- Configuration ---
+const MAX_PLAYERS_PER_SLOT = 4;
+// Heuristic capacity for colors: < 20 (Green), 20-50 (Yellow), > 50 (Red)
+const LOAD_THRESHOLDS = { LOW: 20, MEDIUM: 50 };
+const COURSE_OPEN_HOUR = 6;  // 6:00 AM
+const COURSE_CLOSE_HOUR = 18; // 6:00 PM
 
 const ScheduleScreen: React.FC = () => {
-    const [dates, setDates] = useState<DateItem[]>([]);
-    const [selectedDate, setSelectedDate] = useState<DateItem | null>(null);
-    const [teeTimes, setTeeTimes] = useState<TeeTime[]>([]);
+    // State
+    const [selectedDate, setSelectedDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+    const [monthlyLoad, setMonthlyLoad] = useState<Record<string, any>>({});
+    const [slots, setSlots] = useState<TeeSlot[]>([]);
+    const [loadingSlots, setLoadingSlots] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
 
+    // Modal State
+    const [modalVisible, setModalVisible] = useState(false);
+    const [selectedSlot, setSelectedSlot] = useState<TeeSlot | null>(null);
+    const [flightSize, setFlightSize] = useState(1);
+    const [durationHours, setDurationHours] = useState(4);
+    const [bookingNote, setBookingNote] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+
+    // Club/Venue Selection
+    const [clubs, setClubs] = useState<any[]>([]);
+    const [selectedClubId, setSelectedClubId] = useState<string | null>(null);
+
+    // Load Initial Data
     useEffect(() => {
-        const generatedDates = generateNext14Days();
-        setDates(generatedDates);
-        setSelectedDate(generatedDates[0]); // Select today by default
+        fetchMonthlyLoad(selectedDate);
+        fetchClubs();
     }, []);
 
-    useEffect(() => {
-        if (selectedDate) {
-            setTeeTimes(generateTeeTimes(selectedDate.status));
+    const fetchClubs = async () => {
+        const { data } = await supabase.from('clubs').select('id, name');
+        if (data) {
+            setClubs(data);
+            if (data.length > 0) setSelectedClubId(data[0].id); // Default to first club
         }
+    };
+
+    // Load Slots when date changes
+    useEffect(() => {
+        fetchSlots(selectedDate);
     }, [selectedDate]);
 
-    const handleSlotPress = (item: TeeTime) => {
-        if (item.userStatus === 'pending') {
-            Alert.alert("Request Pending", "You have already requested to join this flight.");
+    // --- Data Fetching ---
+
+    const fetchMonthlyLoad = async (dateStr: string) => {
+        const startOfMonth = new Date(dateStr);
+        startOfMonth.setDate(1); // 1st of month
+        const endOfMonth = new Date(startOfMonth.getFullYear(), startOfMonth.getMonth() + 1, 0); // Last day
+
+        const { data, error } = await supabase.rpc('get_monthly_load', {
+            start_date: startOfMonth.toISOString(),
+            end_date: endOfMonth.toISOString(),
+        });
+
+        if (error) {
+            console.error('Error fetching load:', error);
             return;
         }
 
-        Alert.alert(
-            "Request to Join",
-            `Request to join the ${item.time} flight?`,
-            [
-                { text: "Cancel", style: "cancel" },
-                { text: "Send Request", onPress: () => confirmJoinRequest(item.id) }
-            ]
-        );
-    };
+        // Process Marks
+        const newMarks: Record<string, any> = {};
+        data.forEach((day: any) => {
+            const d = day.day.split('T')[0];
+            const count = day.total_players;
 
-    const confirmJoinRequest = (slotId: string) => {
-        setTeeTimes(prevTimes => prevTimes.map(time => {
-            if (time.id === slotId) {
-                return { ...time, userStatus: 'pending' };
+            let color = COLORS.success; // Green
+            if (count > LOAD_THRESHOLDS.MEDIUM) color = COLORS.error; // Red
+            else if (count > LOAD_THRESHOLDS.LOW) color = COLORS.warning; // Yellow
+
+            // Assume if very high it's fully booked or closed (logic can be refined)
+
+            newMarks[d] = {
+                marked: true,
+                dotColor: color
+            };
+        });
+
+        // --- Fetch User's Personal Bookings for this Month ---
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+                const { data: myBookings } = await supabase
+                    .from('bookings')
+                    .select('start_time, status')
+                    .eq('user_id', user.id)
+                    .gte('start_time', startOfMonth.toISOString())
+                    .lte('start_time', endOfMonth.toISOString())
+                    .in('status', ['confirmed', 'pending']);
+
+                if (myBookings) {
+                    myBookings.forEach((b: any) => {
+                        const d = b.start_time.split('T')[0];
+                        // If confirmed, use Primary (Blue). If pending, use Warning (Yellow) or keep load color?
+                        // Let's prioritize Confirmed as a Blue dot.
+                        if (b.status === 'confirmed') {
+                            newMarks[d] = {
+                                marked: true,
+                                dotColor: COLORS.primary
+                            };
+                        }
+                    });
+                }
             }
-            return time;
-        }));
+        } catch (err) {
+            console.log("Error fetching my bookings for calendar", err);
+        }
+
+        // Add selected indicator
+        const currentMark = newMarks[selectedDate] || {};
+        newMarks[selectedDate] = { ...currentMark, selected: true, selectedColor: COLORS.primary };
+
+        setMonthlyLoad(newMarks);
     };
 
-    const getStatusColor = (status: string, isSelected: boolean) => {
-        if (isSelected) return COLORS.primary; // Selected Highlight
-        switch (status) {
-            case 'open': return '#4CAF50'; // Green
-            case 'busy': return '#FFC107'; // Yellow
-            case 'full': return '#F44336'; // Red
-            default: return '#9E9E9E'; // Grey (Closed)
+    const fetchSlots = async (dateStr: string) => {
+        setLoadingSlots(true);
+
+        // 1. Generate Base Slots (Using Configured Hours)
+        const baseSlots: TeeSlot[] = [];
+        const startHour = COURSE_OPEN_HOUR;
+        const endHour = COURSE_CLOSE_HOUR; // 5 PM
+        const dateObj = new Date(dateStr);
+
+        for (let h = startHour; h < endHour; h++) {
+            ['00', '15', '30', '45'].forEach(min => {
+                // Construct ISO string for this slot
+                const d = new Date(dateObj);
+                d.setHours(h);
+                d.setMinutes(parseInt(min));
+                d.setSeconds(0);
+                d.setMilliseconds(0);
+
+                baseSlots.push({
+                    slot_time: d.toISOString(),
+                    booked_count: 0,
+                    is_user_booked: false,
+                    user_booking_status: null,
+                    user_booking_id: null
+                });
+            });
+        }
+
+        // 2. Fetch Bookings from Supabase
+        const startDt = new Date(dateStr);
+        startDt.setHours(0, 0, 0, 0);
+        const endDt = new Date(dateStr);
+        endDt.setHours(23, 59, 59, 999);
+
+        let { data, error } = await supabase.rpc('get_tee_sheet_range', {
+            start_dt: startDt.toISOString(),
+            end_dt: endDt.toISOString()
+        });
+
+        // Fallback for PGRST202 (Function not found) if user hasn't run the SQL migration yet
+        if (error && error.code === 'PGRST202') {
+            console.warn("get_tee_sheet_range not found, falling back to get_tee_sheet");
+            const { data: fallbackData, error: fallbackError } = await supabase.rpc('get_tee_sheet', {
+                target_date: dateStr
+            });
+            data = fallbackData;
+            error = fallbackError;
+        }
+
+        if (error) {
+            console.error('Error fetching slots:', error);
+            // Default to empty slots if error, don't crash
+            setSlots(baseSlots);
+        } else {
+            // 3. Merge Bookings into Base Slots
+            // We use a map for O(1) lookup
+            const bookingsMap = new Map<string, TeeSlot>();
+            if (data) {
+                data.forEach((b: any) => {
+                    // Normalize the time string to compare
+                    const t = new Date(b.slot_time).toISOString();
+                    bookingsMap.set(t, b);
+                });
+            }
+
+            const mergedSlots = baseSlots.map(slot => {
+                const booking = bookingsMap.get(slot.slot_time);
+                return booking ? booking : slot;
+            });
+
+            setSlots(mergedSlots);
+        }
+        setLoadingSlots(false);
+    };
+
+    const handleRefresh = () => {
+        setRefreshing(true);
+        Promise.all([fetchMonthlyLoad(selectedDate), fetchSlots(selectedDate)])
+            .finally(() => setRefreshing(false));
+    };
+
+    // --- Actions ---
+
+    const openBookingModal = (slot: TeeSlot) => {
+        // Prevent booking passing time
+        const slotTime = new Date(slot.slot_time);
+        const now = new Date();
+        if (slotTime < now) {
+            Alert.alert("Invalid Time", "You cannot schedule a game in the past.");
+            return;
+        }
+
+        if (slot.is_user_booked) {
+            // If proposed, maybe show acceptance logic? For this iteration just alert.
+            Alert.alert('Booking Status', `Status: ${slot.user_booking_status?.toUpperCase()}`);
+            return;
+        }
+
+        setSelectedSlot(slot); // CRITICAL: Set slot before opening modal
+        if (clubs.length > 0) setSelectedClubId(clubs[0].id); // Reset to default
+        setFlightSize(1);
+        setDurationHours(4); // Default standard round
+        setBookingNote('');
+        setModalVisible(true);
+    };
+
+    const submitBooking = async () => {
+        // Debug Alert - remove later
+        // Alert.alert("Debug", "Submit process started"); 
+
+        console.log("Submit booking initiated");
+        if (!selectedSlot) {
+            Alert.alert("Error", "No time slot selected.");
+            return;
+        }
+
+        // Only require club selection if clubs are actually available to select
+        if (clubs.length > 0 && !selectedClubId) {
+            console.log("Validation failed: Club required but missing");
+            Alert.alert("Venue Required", "Please select a club/venue.");
+            return;
+        }
+
+        setSubmitting(true);
+
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) throw new Error('Not authenticated');
+
+            // Calculate End Time
+            const endTime = new Date(selectedSlot.slot_time);
+            endTime.setHours(endTime.getHours() + durationHours);
+
+            const payload = {
+                user_id: user.id,
+                club_id: selectedClubId || null,
+                start_time: selectedSlot.slot_time,
+                end_time: endTime.toISOString(),
+                player_count: flightSize,
+                user_note: bookingNote,
+                status: 'pending'
+            };
+
+            console.log("Sending booking payload:", JSON.stringify(payload));
+
+            const { error } = await supabase
+                .from('bookings')
+                .insert(payload);
+
+            if (error) {
+                console.error("Supabase Booking Error:", error);
+                throw error;
+            }
+
+            console.log("Booking submission effective.");
+            Alert.alert('Request Sent', 'Your booking request is pending admin approval.');
+            setModalVisible(false);
+            fetchSlots(selectedDate); // Refresh
+            fetchMonthlyLoad(selectedDate); // Refresh dots
+        } catch (err: any) {
+            console.error("Booking Exception:", err);
+            Alert.alert('Booking Failed', err.message || "Unknown error occurred");
+        } finally {
+            setSubmitting(false);
         }
     };
 
-    const renderDateItem = ({ item }: { item: DateItem }) => {
-        const isSelected = selectedDate?.id === item.id;
-        const statusColor = getStatusColor(item.status, isSelected);
+    // --- Renderers ---
+
+    const renderSlot = ({ item }: { item: TeeSlot }) => {
+        const timeLabel = format(new Date(item.slot_time), 'h:mm a');
+        const availableSpots = MAX_PLAYERS_PER_SLOT - item.booked_count;
+        const isFull = availableSpots <= 0;
+
+        // Status Colors/Badges
+        let statusBadge = null;
+        let statusStyle = {};
+        let adminMessage = null;
+
+        if (item.user_booking_status === 'pending') {
+            statusBadge = <View style={[styles.badge, { backgroundColor: COLORS.warning }]}><Text style={styles.badgeText}>Pending</Text></View>;
+            statusStyle = styles.slotCardPending;
+        } else if (item.user_booking_status === 'confirmed') {
+            statusBadge = <View style={[styles.badge, { backgroundColor: COLORS.success }]}><Text style={styles.badgeText}>Confirmed</Text></View>;
+            statusStyle = styles.slotCardConfirmed;
+        } else if (item.user_booking_status === 'rejected') {
+            statusBadge = <View style={[styles.badge, { backgroundColor: COLORS.error }]}><Text style={styles.badgeText}>Rejected</Text></View>;
+            statusStyle = styles.slotCardRejected;
+            if (item.user_admin_note) {
+                adminMessage = (
+                    <View style={styles.adminMessageContainer}>
+                        <Info size={14} color={COLORS.error} style={{ marginRight: 4 }} />
+                        <Text style={styles.adminMessageText}>Admin: {item.user_admin_note}</Text>
+                    </View>
+                );
+            }
+        } else if (item.user_booking_status === 'proposed') {
+            const proposedTime = item.user_proposed_time ? format(new Date(item.user_proposed_time), 'h:mm a') : 'New Time';
+            statusBadge = <View style={[styles.badge, { backgroundColor: COLORS.info }]}><Text style={styles.badgeText}>{proposedTime}?</Text></View>;
+            statusStyle = styles.slotCardProposed;
+            adminMessage = (
+                <View style={styles.adminMessageContainer}>
+                    <RefreshCw size={14} color={COLORS.info} style={{ marginRight: 4 }} />
+                    <Text style={[styles.adminMessageText, { color: COLORS.info }]}>
+                        Admin proposed change to {proposedTime}
+                    </Text>
+                    {/* Add Accept/Decline buttons here in V2 */}
+                </View>
+            );
+        }
 
         return (
             <TouchableOpacity
-                style={[
-                    styles.dateItem,
-                    isSelected && styles.dateItemSelected,
-                    { borderColor: statusColor }
-                ]}
-                onPress={() => setSelectedDate(item)}
+                style={[styles.slotCard, styles.slotCardBase, statusStyle]}
+                onPress={() => openBookingModal(item)}
+                disabled={(isFull && !item.is_user_booked) || item.user_booking_status === 'rejected'}
             >
-                <Text style={[styles.dayName, isSelected && styles.textSelected]}>{item.dayName}</Text>
-                <Text style={[styles.dayNumber, isSelected && styles.textSelected]}>{item.dayNumber}</Text>
-                <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-            </TouchableOpacity>
-        );
-    };
+                <View style={styles.slotMainRow}>
+                    {/* Left: Time & Status */}
+                    <View style={styles.slotTimeContainer}>
+                        <Text style={styles.slotTime}>{timeLabel}</Text>
+                        {statusBadge}
+                        {!isFull && item.booked_count > 0 && (
+                            <Text style={styles.spotsLeftText}>
+                                {availableSpots} spot{availableSpots !== 1 ? 's' : ''} left
+                            </Text>
+                        )}
+                    </View>
 
-    const renderTeeTimeItem = ({ item }: { item: TeeTime }) => {
-        const isFull = item.players.length >= item.maxPlayers;
-        const isPending = item.userStatus === 'pending';
+                    {/* Right: Visualization */}
+                    <View style={styles.slotVisuals}>
+                        {/* Render Avatars/Circles */}
+                        <View style={styles.avatarRow}>
+                            {/* Occupied Spots */}
+                            {Array.from({ length: item.booked_count }).map((_, i) => (
+                                <View key={`b-${i}`} style={[styles.playerObj, styles.playerBooked]}>
+                                    <Users size={12} color="#fff" />
+                                </View>
+                            ))}
+                            {/* Booked by ME specifically (visual highlight usually, but here handled by generic booked count for privacy, or separate if we want) */}
 
-        return (
-            <TouchableOpacity
-                style={[styles.slotCard, isPending && styles.slotCardPending]}
-                disabled={isFull && !isPending}
-                onPress={() => handleSlotPress(item)}
-            >
-                <View style={styles.timeContainer}>
-                    <Text style={styles.timeText}>{item.time}</Text>
-                    {isPending ? (
-                        <View style={styles.pendingBadge}>
-                            <Text style={styles.pendingText}>Pending</Text>
+                            {/* Empty Spots */}
+                            {Array.from({ length: Math.max(0, MAX_PLAYERS_PER_SLOT - item.booked_count) }).map((_, i) => (
+                                <View key={`e-${i}`} style={[styles.playerObj, styles.playerEmpty]} />
+                            ))}
                         </View>
-                    ) : isFull ? (
-                        <Text style={styles.fullBadge}>FULL</Text>
-                    ) : (
-                        <Text style={styles.openBadge}>{item.maxPlayers - item.players.length} spots</Text>
-                    )}
+
+                        {isFull && !item.is_user_booked && (
+                            <Text style={styles.fullText}>FULL</Text>
+                        )}
+                    </View>
                 </View>
 
-                <View style={styles.playersContainer}>
-                    {item.players.map((url, index) => (
-                        <Image key={index} source={{ uri: url }} style={styles.avatar} />
-                    ))}
-                    {/* Empty slots placeholders */}
-                    {[...Array(item.maxPlayers - item.players.length)].map((_, i) => (
-                        <View key={`empty-${i}`} style={styles.emptyAvatar} />
-                    ))}
-                </View>
+                {/* Admin Message Bubble */}
+                {adminMessage}
+
+                {/* Lock Icon for Full */}
+                {isFull && !item.is_user_booked && (
+                    <View style={styles.lockOverlay}>
+                        <Lock size={16} color="#999" />
+                    </View>
+                )}
             </TouchableOpacity>
         );
     };
 
     return (
         <SafeAreaView style={styles.container}>
-            <View style={styles.header}>
-                <Text style={styles.headerTitle}>Book a Tee Time</Text>
-            </View>
-
-            {/* Calendar Strip (Top Half) */}
+            {/* 1. Master Calendar View */}
             <View style={styles.calendarContainer}>
-                <FlatList
-                    data={dates}
-                    renderItem={renderDateItem}
-                    keyExtractor={(item) => item.id}
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.calendarContent}
+                <Calendar
+                    current={selectedDate}
+                    onDayPress={(day: DateData) => setSelectedDate(day.dateString)}
+                    markedDates={{
+                        ...monthlyLoad,
+                        [selectedDate]: {
+                            selected: true,
+                            selectedColor: COLORS.primary,
+                            ...(monthlyLoad[selectedDate] || {})
+                        }
+                    }}
+                    theme={{
+                        backgroundColor: '#ffffff',
+                        calendarBackground: '#ffffff',
+                        textSectionTitleColor: '#b6c1cd',
+                        selectedDayBackgroundColor: COLORS.primary,
+                        selectedDayTextColor: '#ffffff',
+                        todayTextColor: COLORS.primary,
+                        dayTextColor: '#2d4150',
+                        arrowColor: COLORS.primary,
+                        monthTextColor: COLORS.dark,
+                        textDayFontWeight: '600',
+                        textMonthFontWeight: 'bold',
+                        textDayHeaderFontWeight: '300',
+                        textDayFontSize: 16,
+                    }}
                 />
+
+                {/* Legend */}
+                <View style={styles.legendRow}>
+                    <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.success }]} /><Text style={styles.legendText}>High Availability</Text></View>
+                    <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.warning }]} /><Text style={styles.legendText}>Busy</Text></View>
+                    <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.error }]} /><Text style={styles.legendText}>Full</Text></View>
+                    <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.primary }]} /><Text style={styles.legendText}>My Game</Text></View>
+                </View>
             </View>
 
-            {/* Legend */}
-            <View style={styles.legendContainer}>
-                <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#4CAF50' }]} /><Text style={styles.legendText}>Available</Text></View>
-                <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#FFC107' }]} /><Text style={styles.legendText}>Busy</Text></View>
-                <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#F44336' }]} /><Text style={styles.legendText}>Full</Text></View>
-            </View>
-
-            {/* Time Slots (Bottom Half) */}
-            <FlatList
-                data={teeTimes}
-                renderItem={renderTeeTimeItem}
-                keyExtractor={(item) => item.id}
-                contentContainerStyle={styles.listContent}
-                ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                        <Text style={styles.emptyStateText}>
-                            {selectedDate?.status === 'closed' ? "Course Closed" : "No tee times available for this date."}
+            {/* 2. Tee Sheet View */}
+            <View style={styles.listContainer}>
+                <View style={styles.listHeader}>
+                    <View>
+                        <Text style={styles.listTitle}>Available Times</Text>
+                        <Text style={styles.spotsLeftText}>
+                            Today's Tee Sheet: {COURSE_OPEN_HOUR}:00 AM - {COURSE_CLOSE_HOUR > 12 ? COURSE_CLOSE_HOUR - 12 : COURSE_CLOSE_HOUR}:00 PM
                         </Text>
                     </View>
-                }
-            />
+                    <TouchableOpacity onPress={handleRefresh}>
+                        <RefreshCw size={18} color={COLORS.primary} />
+                    </TouchableOpacity>
+                </View>
+
+                {loadingSlots ? (
+                    <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 40 }} />
+                ) : (
+                    <FlatList
+                        data={slots}
+                        renderItem={renderSlot}
+                        keyExtractor={item => item.slot_time}
+                        contentContainerStyle={styles.listContent}
+                        ListEmptyComponent={<Text style={styles.emptyText}>No tee times available for this date.</Text>}
+                        refreshing={refreshing}
+                        onRefresh={handleRefresh}
+                    />
+                )}
+            </View>
+
+            {/* 3. Booking Modal */}
+            <Modal
+                animationType="slide"
+                transparent={true}
+                visible={modalVisible}
+                onRequestClose={() => setModalVisible(false)}
+            >
+                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Request to Join</Text>
+                            <TouchableOpacity onPress={() => setModalVisible(false)}>
+                                <XCircle size={24} color="#999" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <Text style={styles.modalSubtitle}>
+                            {selectedSlot && format(new Date(selectedSlot.slot_time), 'EEEE, MMMM d • h:mm a')}
+                        </Text>
+
+                        <Text style={styles.modalSubtitle}>
+                            {selectedSlot && format(new Date(selectedSlot.slot_time), 'EEEE, MMMM d • h:mm a')}
+                        </Text>
+
+                        {/* Field 0: Club Selection */}
+                        <Text style={styles.inputLabel}>Select Venue</Text>
+                        <View style={{ marginBottom: 20 }}>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                                {clubs.map(club => (
+                                    <TouchableOpacity
+                                        key={club.id}
+                                        style={[
+                                            styles.flightOption,
+                                            { width: 'auto', paddingHorizontal: 16 },
+                                            selectedClubId === club.id && styles.flightOptionSelected
+                                        ]}
+                                        onPress={() => setSelectedClubId(club.id)}
+                                    >
+                                        <Text style={[
+                                            styles.flightOptionText,
+                                            { fontSize: 14 },
+                                            selectedClubId === club.id && styles.flightOptionTextSelected
+                                        ]}>
+                                            {club.name}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
+
+                        {/* Field 1: Flight Selection */}
+                        <Text style={styles.inputLabel}>Flight Size (Players)</Text>
+                        <View style={styles.flightSelector}>
+                            {[1, 2, 3, 4].map(num => (
+                                <TouchableOpacity
+                                    key={num}
+                                    style={[styles.flightOption, flightSize === num && styles.flightOptionSelected]}
+                                    onPress={() => setFlightSize(num)}
+                                >
+                                    <Text style={[styles.flightOptionText, flightSize === num && styles.flightOptionTextSelected]}>{num}</Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+
+                        {/* Field 2: Duration / End Time */}
+                        <Text style={styles.inputLabel}>Estimated Duration (Hours)</Text>
+                        <View style={styles.flightSelector}>
+                            {[2, 3, 4, 5].map(hrs => (
+                                <TouchableOpacity
+                                    key={hrs}
+                                    style={[styles.flightOption, durationHours === hrs && styles.flightOptionSelected, { width: 60 }]}
+                                    onPress={() => setDurationHours(hrs)}
+                                >
+                                    <Text style={[styles.flightOptionText, durationHours === hrs && styles.flightOptionTextSelected]}>{hrs}h</Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                        {selectedSlot && (
+                            <Text style={{ marginBottom: 20, color: COLORS.textLight, fontSize: 13, fontStyle: 'italic', marginTop: -15 }}>
+                                Ends at: {format(new Date(new Date(selectedSlot.slot_time).getTime() + durationHours * 60 * 60 * 1000), 'h:mm a')}
+                            </Text>
+                        )}
+
+                        {/* Field 2: Note */}
+                        <Text style={styles.inputLabel}>Note for Admin (Optional)</Text>
+                        <TextInput
+                            style={styles.textInput}
+                            placeholder="Example: Need a cart, bringing a guest..."
+                            placeholderTextColor="#999"
+                            multiline
+                            maxLength={140}
+                            value={bookingNote}
+                            onChangeText={setBookingNote}
+                        />
+                        <Text style={styles.charCount}>{bookingNote.length}/140</Text>
+
+                        <TouchableOpacity
+                            style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
+                            onPress={submitBooking}
+                            disabled={submitting}
+                        >
+                            {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitButtonText}>Send Request</Text>}
+                        </TouchableOpacity>
+                    </View>
+                </KeyboardAvoidingView>
+            </Modal>
         </SafeAreaView>
     );
 };
@@ -242,66 +606,24 @@ const ScheduleScreen: React.FC = () => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#f9f9f9',
-    },
-    header: {
-        backgroundColor: COLORS.primary,
-        paddingVertical: 16,
-        paddingHorizontal: 16,
-    },
-    headerTitle: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: '#fff',
+        backgroundColor: '#F7F7F7',
     },
     calendarContainer: {
-        paddingVertical: 15,
         backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#eee',
+        borderBottomLeftRadius: 20,
+        borderBottomRightRadius: 20,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 10,
+        elevation: 4,
+        zIndex: 10,
+        paddingBottom: 10,
     },
-    calendarContent: {
-        paddingHorizontal: 16,
-    },
-    dateItem: {
-        width: 60,
-        height: 80,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 10,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: '#eee',
-        backgroundColor: '#fff',
-    },
-    dateItemSelected: {
-        backgroundColor: COLORS.primary,
-        borderColor: COLORS.primary,
-    },
-    dayName: {
-        fontSize: 12,
-        color: '#888',
-        marginBottom: 4,
-    },
-    dayNumber: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: COLORS.dark,
-    },
-    textSelected: {
-        color: '#fff',
-    },
-    statusDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        marginTop: 6,
-    },
-    legendContainer: {
+    legendRow: {
         flexDirection: 'row',
         justifyContent: 'center',
-        paddingVertical: 8,
-        backgroundColor: '#f0f0f0',
+        marginTop: 10,
     },
     legendItem: {
         flexDirection: 'row',
@@ -312,92 +634,264 @@ const styles = StyleSheet.create({
         width: 8,
         height: 8,
         borderRadius: 4,
-        marginRight: 4,
+        marginRight: 6,
     },
     legendText: {
-        fontSize: 10,
+        fontSize: 12,
         color: '#666',
     },
-    listContent: {
-        padding: 16,
-        paddingBottom: 40,
+    listContainer: {
+        flex: 1,
+        paddingHorizontal: 20,
+        paddingTop: 20,
     },
-    slotCard: {
+    listHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        backgroundColor: '#fff',
-        padding: 16,
+        marginBottom: 15,
+    },
+    listTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: COLORS.dark,
+    },
+    listContent: {
+        paddingBottom: 40,
+    },
+    slotCard: {
         marginBottom: 12,
-        borderRadius: 12,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
+        shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.05,
         shadowRadius: 4,
         elevation: 2,
+        borderRadius: 16,
     },
-    timeContainer: {
-        justifyContent: 'center',
+    slotCardBase: {
+        paddingVertical: 18,
+        paddingHorizontal: 20,
+        backgroundColor: '#fff',
     },
-    timeText: {
+    slotCardPending: {
+        backgroundColor: '#FFF8E1',
+        borderWidth: 1,
+        borderColor: '#FFC107', // COLORS.warning
+    },
+    slotCardConfirmed: {
+        backgroundColor: '#E8F5E9',
+        borderWidth: 1,
+        borderColor: '#4CAF50', // COLORS.success
+    },
+    slotCardRejected: {
+        backgroundColor: '#FFEBEE',
+        borderWidth: 1,
+        borderColor: '#FF6B6B', // COLORS.error
+        opacity: 0.8,
+    },
+    slotCardProposed: {
+        backgroundColor: '#E3F2FD',
+        borderWidth: 1,
+        borderColor: '#2196F3', // COLORS.info
+    },
+    slotCardActive: {
+        borderWidth: 1,
+        borderColor: COLORS.primary,
+        backgroundColor: '#F0F9FF',
+    },
+    slotMainRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    adminMessageContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 8,
+        paddingTop: 8,
+        borderTopWidth: 1,
+        borderTopColor: 'rgba(0,0,0,0.05)',
+    },
+    adminMessageText: {
+        fontSize: 12,
+        color: '#FF6B6B', // COLORS.error
+        fontStyle: 'italic',
+        flex: 1,
+    },
+    slotTimeContainer: {
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+    },
+    slotTime: {
         fontSize: 18,
-        fontWeight: '600',
+        fontWeight: '700',
         color: COLORS.text,
         marginBottom: 4,
     },
-    openBadge: {
-        fontSize: 12,
-        color: COLORS.primary,
-        fontWeight: '500',
-    },
-    fullBadge: {
-        fontSize: 12,
-        color: COLORS.error,
-        fontWeight: 'bold',
-    },
-    playersContainer: {
-        flexDirection: 'row',
-    },
-    avatar: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        marginLeft: -10,
-        borderWidth: 2,
-        borderColor: '#fff',
-    },
-    emptyAvatar: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        marginLeft: -10,
-        backgroundColor: '#f0f0f0',
-        borderWidth: 2,
-        borderColor: '#fff',
-        borderStyle: 'dashed',
-    },
-    emptyState: {
-        padding: 40,
-        alignItems: 'center',
-    },
-    emptyStateText: {
-        color: '#999',
-        fontSize: 16,
-    },
-    slotCardPending: {
-        borderWidth: 1,
-        borderColor: '#FFA000',
-        backgroundColor: '#FFF8E1',
-    },
-    pendingBadge: {
-        backgroundColor: '#FFA000',
+    badge: {
         paddingHorizontal: 8,
         paddingVertical: 2,
         borderRadius: 4,
+        marginTop: 4,
     },
-    pendingText: {
-        fontSize: 12,
+    badgeText: {
         color: '#fff',
+        fontSize: 10,
+        fontWeight: 'bold',
+        textTransform: 'uppercase',
+    },
+    slotVisuals: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    avatarRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    playerObj: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        marginLeft: -8,
+        borderWidth: 2,
+        borderColor: '#fff',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    playerBooked: {
+        backgroundColor: COLORS.secondary,
+        zIndex: 2,
+    },
+    playerEmpty: {
+        backgroundColor: '#F0F0F0',
+        zIndex: 1,
+    },
+    fullText: {
+        marginLeft: 10,
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: COLORS.error,
+    },
+    lockOverlay: {
+        position: 'absolute',
+        right: 20,
+        top: 20,
+    },
+    emptyText: {
+        textAlign: 'center',
+        color: '#999',
+        marginTop: 20,
+        fontSize: 14,
+    },
+    spotsLeftText: {
+        fontSize: 12,
+        color: COLORS.textLight,
+        marginTop: 2,
+        fontWeight: '500',
+    },
+    // Modal Styles
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'flex-end',
+    },
+    modalContent: {
+        backgroundColor: '#fff',
+        borderTopLeftRadius: 25,
+        borderTopRightRadius: 25,
+        padding: 25,
+        paddingBottom: 50,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: -4 },
+        shadowOpacity: 0.1,
+        shadowRadius: 10,
+        elevation: 10,
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 10,
+    },
+    modalTitle: {
+        fontSize: 22,
+        fontWeight: 'bold',
+        color: COLORS.dark,
+    },
+    modalSubtitle: {
+        fontSize: 16,
+        color: COLORS.primary,
+        marginBottom: 25,
+        fontWeight: '500',
+    },
+    inputLabel: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: COLORS.textLight,
+        marginBottom: 10,
+    },
+    flightSelector: {
+        flexDirection: 'row',
+        marginBottom: 25,
+    },
+    flightOption: {
+        width: 50,
+        height: 50,
+        borderRadius: 25,
+        backgroundColor: '#F5F5F5',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 15,
+        borderWidth: 1,
+        borderColor: '#EEE',
+    },
+    flightOptionSelected: {
+        backgroundColor: COLORS.primary,
+        borderColor: COLORS.primary,
+    },
+    flightOptionText: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: COLORS.text,
+    },
+    flightOptionTextSelected: {
+        color: '#fff',
+    },
+    textInput: {
+        backgroundColor: '#F9F9F9',
+        borderRadius: 12,
+        padding: 15,
+        height: 100,
+        textAlignVertical: 'top',
+        borderWidth: 1,
+        borderColor: '#EEE',
+        fontSize: 16,
+        color: COLORS.text,
+    },
+    charCount: {
+        textAlign: 'right',
+        fontSize: 12,
+        color: '#ccc',
+        marginTop: 5,
+        marginBottom: 25,
+    },
+    submitButton: {
+        backgroundColor: COLORS.primary,
+        borderRadius: 15,
+        paddingVertical: 18,
+        alignItems: 'center',
+        shadowColor: COLORS.primary,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 5,
+    },
+    submitButtonDisabled: {
+        opacity: 0.7,
+    },
+    submitButtonText: {
+        color: '#fff',
+        fontSize: 18,
         fontWeight: 'bold',
     },
 });

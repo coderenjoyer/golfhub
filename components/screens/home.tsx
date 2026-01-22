@@ -10,6 +10,7 @@ import {
     Platform,
     Image,
     RefreshControl,
+    ImageBackground,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Bell, Calendar as CalendarIcon, MapPin } from 'lucide-react-native'; // Added icons to utilize in cards
@@ -17,6 +18,7 @@ import { Bell, Calendar as CalendarIcon, MapPin } from 'lucide-react-native'; //
 import { supabase } from '../../lib/supabase';
 import { COLORS } from '../../constants/colors';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { format } from 'date-fns';
 
 const HomeScreen: React.FC = () => {
     const navigation = useNavigation<any>();
@@ -24,6 +26,7 @@ const HomeScreen: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [nextGame, setNextGame] = useState<any>(null);
     const [tournaments, setTournaments] = useState<any[]>([]);
+    const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
 
     // Cache Keys
     const DASHBOARD_CACHE_KEY = 'golfhub_dashboard_data';
@@ -32,20 +35,7 @@ const HomeScreen: React.FC = () => {
     // Mock Data for "fetch"
     const MOCK_DATA = {
         nextGame: null, // Change this to an object to see a booked game
-        tournaments: [
-            {
-                id: 1,
-                title: 'Summer Open 2026',
-                date: 'Nov 15, 2026',
-                image: 'https://images.unsplash.com/photo-1587174486073-ae5e5cff23aa?q=80&w=2070&auto=format&fit=crop'
-            },
-            {
-                id: 2,
-                title: 'Wack Wack Charity',
-                date: 'Dec 05, 2026',
-                image: 'https://images.unsplash.com/photo-1535131749006-b7f58c99034b?q=80&w=2070&auto=format&fit=crop'
-            }
-        ]
+        tournaments: []
     };
 
     const loadData = async (isRefresh = false) => {
@@ -54,11 +44,69 @@ const HomeScreen: React.FC = () => {
             // Simulate API Network Request
             await new Promise(resolve => setTimeout(resolve, 1500));
 
+            // Fetch Next Game and Avatar
+            const { data: { user } } = await supabase.auth.getUser();
+            let realNextGame = null;
+            let userAvatar = null;
+
+            if (user) {
+                // Fetch Avatar
+                const { data: profile } = await supabase
+                    .from('profiles')
+                    .select('avatar_url')
+                    .eq('id', user.id)
+                    .single();
+
+                if (profile) userAvatar = profile.avatar_url;
+
+                const { data: bookings } = await supabase
+                    .from('bookings')
+                    .select('*')
+                    .eq('user_id', user.id)
+                    .eq('status', 'confirmed')
+                    .gte('start_time', new Date().toISOString())
+                    .order('start_time', { ascending: true })
+                    .limit(1);
+
+                if (bookings && bookings.length > 0) {
+                    const b = bookings[0];
+                    const dateObj = new Date(b.start_time);
+                    realNextGame = {
+                        courseName: 'Clubhouse Course', // Placeholder or join with course/club table if exists
+                        date: format(dateObj, 'MMM d, yyyy'),
+                        time: format(dateObj, 'h:mm a')
+                    };
+
+                    // Check for Game Today Notification
+                    const isToday = new Date(b.start_time).toDateString() === new Date().toDateString();
+                    if (isToday) {
+                        const { count } = await supabase.from('notifications')
+                            .select('id', { count: 'exact', head: true })
+                            .eq('related_entity_id', b.id)
+                            .eq('type', 'game_reminder');
+
+                        if (count === 0) {
+                            await supabase.from('notifications').insert({
+                                user_id: user.id,
+                                title: 'Golf Game Today!',
+                                body: `You have a game schedule today at ${format(dateObj, 'h:mm a')}. Good luck!`,
+                                type: 'game_reminder',
+                                related_entity_id: b.id
+                            });
+                        }
+                    }
+                }
+            }
+
             // In a real app, this would be: const response = await api.getDashboard();
-            const newData = MOCK_DATA;
+            const newData = {
+                nextGame: realNextGame,
+                tournaments: MOCK_DATA.tournaments // Keep mock tournaments for now
+            };
 
             setNextGame(newData.nextGame);
             setTournaments(newData.tournaments);
+            if (userAvatar) setAvatarUrl(userAvatar);
 
             // Cache the fresh data
             await AsyncStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify(newData));
@@ -161,13 +209,13 @@ const HomeScreen: React.FC = () => {
             <View style={styles.header}>
                 <Text style={styles.headerTitle}>GolfBuddy</Text>
                 <View style={styles.headerRight}>
-                    <TouchableOpacity style={styles.iconButton}>
+                    <TouchableOpacity style={styles.iconButton} onPress={() => navigation.navigate('Notifications')}>
                         <Bell color={COLORS.white} size={24} />
                         <View style={styles.notificationDot} />
                     </TouchableOpacity>
                     <TouchableOpacity onPress={handleLogout} style={styles.profileButton}>
                         <Image
-                            source={{ uri: 'https://i.pravatar.cc/100?u=user' }}
+                            source={{ uri: avatarUrl || 'https://i.pravatar.cc/100?u=user' }}
                             style={styles.headerAvatar}
                         />
                     </TouchableOpacity>
@@ -187,8 +235,13 @@ const HomeScreen: React.FC = () => {
 
                     {/* Dynamic Hero Section */}
                     {nextGame ? (
-                        <View style={[styles.heroCard, { backgroundColor: COLORS.secondary }]}>
-                            <View style={styles.heroContent}>
+                        <ImageBackground
+                            source={require('../../public/golf_card.png')}
+                            style={[styles.heroCard, { backgroundColor: COLORS.secondary }]}
+                            imageStyle={{ borderRadius: 20, opacity: 0.9 }}
+                            resizeMode="cover"
+                        >
+                            <View style={[styles.heroContent, { backgroundColor: 'rgba(0,0,0,0.3)', width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }]}>
                                 <Text style={styles.heroMessage}>Upcoming: {nextGame.courseName}</Text>
                                 <Text style={styles.heroSubMessage}>{nextGame.date} @ {nextGame.time}</Text>
 
@@ -199,10 +252,15 @@ const HomeScreen: React.FC = () => {
                                     <Text style={styles.heroButtonText}>View Details</Text>
                                 </TouchableOpacity>
                             </View>
-                        </View>
+                        </ImageBackground>
                     ) : (
-                        <View style={[styles.heroCard, { backgroundColor: COLORS.primary }]}>
-                            <View style={styles.heroContent}>
+                        <ImageBackground
+                            source={require('../../public/golf_card.png')}
+                            style={[styles.heroCard, { backgroundColor: COLORS.primary }]}
+                            imageStyle={{ borderRadius: 20, opacity: 0.9 }}
+                            resizeMode="cover"
+                        >
+                            <View style={[styles.heroContent, { backgroundColor: 'rgba(0,0,0,0.3)', width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }]}>
                                 <Text style={styles.heroMessage}>No upcoming games.</Text>
                                 <Text style={styles.heroSubMessage}>Find a tee time and invite your buddies!</Text>
 
@@ -213,7 +271,7 @@ const HomeScreen: React.FC = () => {
                                     <Text style={styles.heroButtonText}>View Schedule</Text>
                                 </TouchableOpacity>
                             </View>
-                        </View>
+                        </ImageBackground>
                     )}
                 </View>
 
@@ -226,27 +284,33 @@ const HomeScreen: React.FC = () => {
                         </TouchableOpacity>
                     </View>
 
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.carouselContent}>
-                        {tournaments.map((tournament) => (
-                            <TouchableOpacity
-                                key={tournament.id}
-                                style={styles.tournamentCard}
-                                onPress={() => navigation.navigate('Tournaments')}
-                            >
-                                <Image
-                                    source={{ uri: tournament.image }}
-                                    style={styles.tournamentImage}
-                                />
-                                <View style={styles.tournamentInfo}>
-                                    <Text style={styles.tournamentTitle}>{tournament.title}</Text>
-                                    <View style={styles.tournamentMeta}>
-                                        <CalendarIcon size={14} color={COLORS.textLight} />
-                                        <Text style={styles.tournamentDate}>{tournament.date}</Text>
+                    {tournaments.length === 0 ? (
+                        <View style={styles.emptyContainer}>
+                            <Text style={styles.emptyText}>No upcoming tournaments yet.</Text>
+                        </View>
+                    ) : (
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.carouselContent}>
+                            {tournaments.map((tournament) => (
+                                <TouchableOpacity
+                                    key={tournament.id}
+                                    style={styles.tournamentCard}
+                                    onPress={() => navigation.navigate('Tournaments')}
+                                >
+                                    <Image
+                                        source={{ uri: tournament.image }}
+                                        style={styles.tournamentImage}
+                                    />
+                                    <View style={styles.tournamentInfo}>
+                                        <Text style={styles.tournamentTitle}>{tournament.title}</Text>
+                                        <View style={styles.tournamentMeta}>
+                                            <CalendarIcon size={14} color={COLORS.textLight} />
+                                            <Text style={styles.tournamentDate}>{tournament.date}</Text>
+                                        </View>
                                     </View>
-                                </View>
-                            </TouchableOpacity>
-                        ))}
-                    </ScrollView>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    )}
                 </View>
 
             </ScrollView>
@@ -419,6 +483,16 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: COLORS.textLight,
         marginLeft: 6,
+    },
+    emptyContainer: {
+        paddingVertical: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    emptyText: {
+        color: COLORS.textLight,
+        fontSize: 14,
+        fontStyle: 'italic',
     },
 });
 

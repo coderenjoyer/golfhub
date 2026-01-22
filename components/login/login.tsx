@@ -85,10 +85,26 @@ export default function Login() {
                     },
                 });
                 if (error) throw error;
-                Alert.alert('Success', 'Please check your inbox for email verification!');
+                if (Platform.OS === 'web') {
+                    alert('Please check your inbox for email verification!');
+                } else {
+                    Alert.alert('Success', 'Please check your inbox for email verification!');
+                }
             }
         } catch (error: any) {
-            Alert.alert('Error', error.message);
+            let message = error.message;
+            let title = "Error";
+
+            if (message.includes("Invalid login credentials")) {
+                title = "Wrong Password";
+                message = "The password you entered is incorrect. Please try again.";
+            }
+
+            if (Platform.OS === 'web') {
+                alert(`${title}: ${message}`);
+            } else {
+                Alert.alert(title, message);
+            }
         } finally {
             setLoading(false);
         }
@@ -146,7 +162,7 @@ export default function Login() {
                                         <Text style={styles.label}>First Name</Text>
                                         <TextInput
                                             style={styles.input}
-                                            placeholder="Tiger"
+                                            placeholder="Juan"
                                             value={firstName}
                                             onChangeText={setFirstName}
                                             placeholderTextColor="#999"
@@ -156,7 +172,7 @@ export default function Login() {
                                         <Text style={styles.label}>Last Name</Text>
                                         <TextInput
                                             style={styles.input}
-                                            placeholder="Woods"
+                                            placeholder="Dela Cruz"
                                             value={lastName}
                                             onChangeText={setLastName}
                                             placeholderTextColor="#999"

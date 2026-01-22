@@ -9,4 +9,7 @@ export const COLORS = {
     text: '#333333',
     textLight: '#666666',
     error: '#FF6B6B',
+    info: '#2196F3',
+    warning: '#FFC107',
+    success: '#4CAF50',
 };

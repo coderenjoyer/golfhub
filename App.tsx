@@ -16,6 +16,8 @@ import TournamentsScreen from './components/screens/tournament';
 import ClubhouseScreen from './components/screens/clubhouse';
 import ProfileScreen from './components/screens/profile';
 import AdminDashboard from './components/screens/admin/dashboard';
+import MyBookingsScreen from './components/screens/my_bookings';
+import NotificationsScreen from './components/screens/notifications';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -130,7 +132,11 @@ const App = () => {
         {isAdmin ? (
           <Stack.Screen name="AdminDashboard" component={AdminDashboard} />
         ) : (
-          <Stack.Screen name="HomeTabs" component={HomeTabs} />
+          <>
+            <Stack.Screen name="HomeTabs" component={HomeTabs} />
+            <Stack.Screen name="MyBookings" component={MyBookingsScreen} />
+            <Stack.Screen name="Notifications" component={NotificationsScreen} />
+          </>
         )}
       </Stack.Navigator>
     </NavigationContainer>
