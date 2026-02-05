@@ -8,6 +8,7 @@ import { Home, Calendar, Trophy, Wine, User } from 'lucide-react-native';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from './lib/supabase';
 import Login from './components/login/login';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 // Screen Imports
 import HomeScreen from './components/screens/home';
@@ -127,19 +128,21 @@ const App = () => {
   }
 
   return (
-    <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {isAdmin ? (
-          <Stack.Screen name="AdminDashboard" component={AdminDashboard} />
-        ) : (
-          <>
-            <Stack.Screen name="HomeTabs" component={HomeTabs} />
-            <Stack.Screen name="MyBookings" component={MyBookingsScreen} />
-            <Stack.Screen name="Notifications" component={NotificationsScreen} />
-          </>
-        )}
-      </Stack.Navigator>
-    </NavigationContainer>
+    <SafeAreaProvider>
+      <NavigationContainer>
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          {isAdmin ? (
+            <Stack.Screen name="AdminDashboard" component={AdminDashboard} />
+          ) : (
+            <>
+              <Stack.Screen name="HomeTabs" component={HomeTabs} />
+              <Stack.Screen name="MyBookings" component={MyBookingsScreen} />
+              <Stack.Screen name="Notifications" component={NotificationsScreen} />
+            </>
+          )}
+        </Stack.Navigator>
+      </NavigationContainer>
+    </SafeAreaProvider>
   );
 };
 

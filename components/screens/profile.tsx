@@ -3,7 +3,6 @@ import { COLORS } from '../../constants/colors';
 import {
     View,
     Text,
-    SafeAreaView,
     StyleSheet,
     ScrollView,
     Image,
@@ -12,6 +11,7 @@ import {
     Platform,
     Dimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Calendar, Users, Bell, Lock, Edit2, ChevronRight, LogOut } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -22,6 +22,7 @@ import { useNavigation } from '@react-navigation/native';
 const { width } = Dimensions.get('window');
 
 const ProfileScreen: React.FC = () => {
+    const insets = useSafeAreaInsets();
     const navigation = useNavigation<any>();
     const [loading, setLoading] = useState(true);
     const [profile, setProfile] = useState<any>(null);
@@ -208,7 +209,7 @@ const ProfileScreen: React.FC = () => {
                     colors={['#0288D1', '#2E7D32']}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
-                    style={styles.headerGradient}
+                    style={[styles.headerGradient, { paddingTop: insets.top + 20 }]}
                 >
                     <View style={styles.headerContent}>
                         <TouchableOpacity style={styles.avatarContainer} onPress={pickImage} disabled={loading}>
@@ -306,7 +307,7 @@ const styles = StyleSheet.create({
     },
     headerGradient: {
         height: 280,
-        paddingTop: 60, // approximate status bar
+        // paddingTop: 60, // Handled dynamically now
         alignItems: 'center',
         borderBottomLeftRadius: 30,
         borderBottomRightRadius: 30,

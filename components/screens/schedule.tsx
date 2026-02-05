@@ -3,7 +3,6 @@ import { COLORS } from '../../constants/colors';
 import {
     View,
     Text,
-    SafeAreaView,
     StyleSheet,
     FlatList,
     TouchableOpacity,
@@ -16,6 +15,7 @@ import {
     Platform,
     ScrollView
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Calendar, DateData, LocaleConfig } from 'react-native-calendars';
 import { format } from 'date-fns';
 import { supabase } from '../../lib/supabase';

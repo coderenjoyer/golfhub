@@ -2,7 +2,6 @@ import React, { useState, useCallback, useEffect } from 'react';
 import {
     View,
     Text,
-    SafeAreaView,
     StyleSheet,
     ScrollView,
     TouchableOpacity,
@@ -12,7 +11,8 @@ import {
     RefreshControl,
     ImageBackground,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Bell, Calendar as CalendarIcon, MapPin } from 'lucide-react-native'; // Added icons to utilize in cards
 
 import { supabase } from '../../lib/supabase';
@@ -27,6 +27,7 @@ const HomeScreen: React.FC = () => {
     const [nextGame, setNextGame] = useState<any>(null);
     const [tournaments, setTournaments] = useState<any[]>([]);
     const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+    const [hasUnread, setHasUnread] = useState(false);
 
     // Cache Keys
     const DASHBOARD_CACHE_KEY = 'golfhub_dashboard_data';
@@ -38,9 +39,30 @@ const HomeScreen: React.FC = () => {
         tournaments: []
     };
 
+    useFocusEffect(
+        useCallback(() => {
+            checkUnreadNotifications();
+        }, [])
+    );
+
+    const checkUnreadNotifications = async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+            const { count } = await supabase
+                .from('notifications')
+                .select('id', { count: 'exact', head: true })
+                .eq('user_id', user.id)
+                .eq('is_read', false);
+
+            setHasUnread(count !== null && count > 0);
+        }
+    };
+
     const loadData = async (isRefresh = false) => {
         if (!isRefresh) setIsLoading(true);
         try {
+            await checkUnreadNotifications();
+
             // Simulate API Network Request
             await new Promise(resolve => setTimeout(resolve, 1500));
 
@@ -93,6 +115,8 @@ const HomeScreen: React.FC = () => {
                                 type: 'game_reminder',
                                 related_entity_id: b.id
                             });
+                            // Refresh unread count if we just added one
+                            checkUnreadNotifications();
                         }
                     }
                 }
@@ -211,7 +235,7 @@ const HomeScreen: React.FC = () => {
                 <View style={styles.headerRight}>
                     <TouchableOpacity style={styles.iconButton} onPress={() => navigation.navigate('Notifications')}>
                         <Bell color={COLORS.white} size={24} />
-                        <View style={styles.notificationDot} />
+                        {hasUnread && <View style={styles.notificationDot} />}
                     </TouchableOpacity>
                     <TouchableOpacity onPress={handleLogout} style={styles.profileButton}>
                         <Image

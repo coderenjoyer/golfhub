@@ -16,7 +16,7 @@
     "@supabase/supabase-js": "^2.90.1",
     "base64-arraybuffer": "^1.0.2",
     "date-fns": "^4.1.0",
-    "expo": "~54.0.31",
+    "expo": "~54.0.32",
     "expo-image-picker": "~17.0.10",
     "expo-linear-gradient": "^15.0.8",
     "expo-sqlite": "~16.0.10",

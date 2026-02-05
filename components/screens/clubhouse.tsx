@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-    View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
+    View, Text, StyleSheet, TouchableOpacity,
     FlatList, Image, TextInput, KeyboardAvoidingView, Platform,
     Alert, ActivityIndicator, ScrollView
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, MapPin, Users, Send, ArrowLeft, MessageSquare, Plus, LogOut } from 'lucide-react-native';
 import { COLORS } from '../../constants/colors';
 import { supabase } from '../../lib/supabase';
@@ -22,6 +23,8 @@ const ClubhouseScreen: React.FC = () => {
     const [inputText, setInputText] = useState('');
     const [userId, setUserId] = useState<string | null>(null);
 
+    const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
+
     const flatListRef = useRef<FlatList>(null);
 
     useEffect(() => {
@@ -34,32 +37,56 @@ const ClubhouseScreen: React.FC = () => {
     }, [userId]);
 
     // Real-time Chat Subscription
+    // Real-time Chat Subscription
     useEffect(() => {
-        let subscription: any;
-        if (view === 'chat' && activeClub) {
-            fetchMessages(activeClub.id);
+        let channel: any;
+        if (view === 'chat' && activeClub?.id) {
+            const clubId = activeClub.id;
+            fetchMessages(clubId);
 
-            const channel = supabase.channel(`club_chat:${activeClub.id}`)
+            channel = supabase.channel(`club_chat:${clubId}`)
                 .on(
                     'postgres_changes',
-                    { event: 'INSERT', schema: 'public', table: 'club_messages', filter: `club_id=eq.${activeClub.id}` },
+                    { event: 'INSERT', schema: 'public', table: 'club_messages', filter: `club_id=eq.${clubId}` },
                     (payload) => {
-                        // Fetch profile for the new message or just append if we keep it simple
-                        // For now, let's just refetch to get the profile data easily (inefficient but safe)
-                        // limit to 1 row would be better, but quick fetch is fine for low volume
-                        fetchMessages(activeClub.id);
+                        fetchMessages(clubId);
+                    }
+                )
+                .on(
+                    'postgres_changes',
+                    { event: '*', schema: 'public', table: 'club_memberships', filter: `club_id=eq.${clubId}` },
+                    async () => {
+                        // Update member count for this club
+                        const { count } = await supabase
+                            .from('club_memberships')
+                            .select('*', { count: 'exact', head: true })
+                            .eq('club_id', clubId);
+
+                        if (count !== null) {
+                            setActiveClub((prev: any) => prev?.id === clubId ? { ...prev, member_count: count } : prev);
+                            setMyClubs(prev => prev.map(c => c.id === clubId ? { ...c, member_count: count } : c));
+                            setAllClubs(prev => prev.map(c => c.id === clubId ? { ...c, member_count: count } : c));
+                        }
                     }
                 )
                 .subscribe();
 
             return () => { supabase.removeChannel(channel); };
         }
-    }, [view, activeClub]);
+    }, [view, activeClub?.id]);
 
 
     const fetchUser = async () => {
         const { data: { user } } = await supabase.auth.getUser();
-        if (user) setUserId(user.id);
+        if (user) {
+            setUserId(user.id);
+            const { data } = await supabase
+                .from('profiles')
+                .select('first_name, last_name, handicap')
+                .eq('id', user.id)
+                .single();
+            if (data) setCurrentUserProfile(data);
+        }
     };
 
     const fetchClubs = async () => {
@@ -137,7 +164,20 @@ const ClubhouseScreen: React.FC = () => {
         if (!inputText.trim() || !userId || !activeClub) return;
 
         const text = inputText.trim();
-        setInputText(''); // optimistic clear
+        setInputText(''); // optimize clear
+
+        // Optimistic update
+        const tempId = 'temp-' + Date.now();
+        const optimisticMessage = {
+            id: tempId,
+            content: text,
+            created_at: new Date().toISOString(),
+            user_id: userId,
+            profiles: currentUserProfile || { first_name: 'Me' } // Fallback
+        };
+
+        setMessages(prev => [...prev, optimisticMessage]);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
 
         const { error } = await supabase
             .from('club_messages')
@@ -149,7 +189,9 @@ const ClubhouseScreen: React.FC = () => {
 
         if (error) {
             Alert.alert("Failed", error.message);
-            setInputText(text); // revert
+            // Revert optimistic update
+            setMessages(prev => prev.filter(m => m.id !== tempId));
+            setInputText(text); // revert text
         }
     };
 

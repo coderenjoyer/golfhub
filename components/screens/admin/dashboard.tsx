@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, SafeAreaView, Platform, TextInput, Modal, Alert, Switch, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Modal, Alert, Switch, Image } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Users, TrendingUp, Calendar, ChevronRight, Settings, AlertCircle, LogOut, MapPin } from 'lucide-react-native';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';

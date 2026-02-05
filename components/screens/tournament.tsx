@@ -3,10 +3,10 @@ import { COLORS } from '../../constants/colors';
 import {
     View,
     Text,
-    SafeAreaView,
     StyleSheet,
     ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const TournamentsScreen: React.FC = () => {
     return (
